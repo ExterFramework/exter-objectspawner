@@ -1,251 +1,203 @@
 Core = nil
-CoreName = nil
+CoreName = 'standalone'
 CoreReady = false
-Citizen.CreateThread(function()
-    for k, v in pairs(Cores) do
-        if GetResourceState(v.ResourceName) == "starting" or GetResourceState(v.ResourceName) == "started" then
-            CoreName = v.ResourceName
-            Core = v.GetFramework()
-            CoreReady = true
+
+CreateThread(function()
+    for _, v in pairs(Cores) do
+        local state = GetResourceState(v.ResourceName)
+        if state == 'starting' or state == 'started' then
+            local ok, framework = pcall(v.GetFramework)
+            if ok and framework then
+                CoreName = v.ResourceName
+                Core = framework
+                break
+            end
         end
     end
+
+    CoreReady = true
 end)
 
-function GetPlayer(source)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(source)
-        return player
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
-        return player
-    else
-        --CUSTOM GET PLAYER FUNCTION HERE
+local function getStandaloneIdentifier(src)
+    local identifiers = GetPlayerIdentifiers(src)
+    for i = 1, #identifiers do
+        if identifiers[i]:find('license:') == 1 then
+            return identifiers[i]
+        end
     end
+
+    return ('src:%s'):format(src)
+end
+
+function GetPlayer(source)
+    if CoreName == 'qb-core' or CoreName == 'qbx_core' then
+        return Core and Core.Functions and Core.Functions.GetPlayer(source) or nil
+    elseif CoreName == 'es_extended' then
+        return Core and Core.GetPlayerFromId and Core.GetPlayerFromId(source) or nil
+    end
+
+    return { source = source }
 end
 
 function GetPlayerCid(source)
-    if CoreName == "qb-core" then
-        local player = Core.Functions.GetPlayer(source)
-        if player ~= nil then
-            return player.PlayerData.citizenid
-        else
-            return nil
+    if CoreName == 'qb-core' or CoreName == 'qbx_core' then
+        local player = GetPlayer(source)
+        return player and player.PlayerData and player.PlayerData.citizenid or nil
+    elseif CoreName == 'es_extended' then
+        local player = GetPlayer(source)
+        return player and player.getIdentifier and player.getIdentifier() or nil
+    end
+
+    return getStandaloneIdentifier(source)
+end
+
+function Notify(source, text, msgType, length)
+    if CoreName == 'qb-core' or CoreName == 'qbx_core' then
+        if Core and Core.Functions and Core.Functions.Notify then
+            Core.Functions.Notify(source, text, msgType or 'success', length or 5000)
+            return
         end
-        -- return player.PlayerData.citizenid
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
-        return player.getIdentifier()
-    else
-        --CUSTOM GET PLAYER CID FUNCTION HERE
-    end
-end
-
-
-function Notify(source, text, length, type)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        Core.Functions.Notify(source, text, length, type)
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
-        player.showNotification(text)
-    else
-    --CUSTOM NOTIFY FUNCTION HERE
-    end
-end
-
-function GetPlayerMoney(src, type)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(src)
-        return player.PlayerData.money[type]
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(src)
-        local acType = "bank"
-        if type == "cash" then
-            acType = "money"
-        end
-        local account = player.getAccount(acType).money
-        return player
-    else
-        --CUSTOM ACCOUNT GET MONEY FUNCTION HERE
-    end
-end
-
-function AddMoney(src, type, amount, description)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(src)
-        player.Functions.AddMoney(type, amount, description)
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(src)
-        if type == "bank" then
-            player.addAccountMoney("bank", amount, description)
-        elseif type == "cash" then
-            player.addMoney(amount, description)
+    elseif CoreName == 'es_extended' then
+        local player = GetPlayer(source)
+        if player and player.showNotification then
+            player.showNotification(text)
+            return
         end
     end
+
+    TriggerClientEvent('chat:addMessage', source, {
+        args = { 'ObjectSpawner', text }
+    })
 end
-
-
-function RemoveMoney(src, type, amount, description)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(src)
-        player.Functions.RemoveMoney(type, amount, description)
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(src)
-        if type == "bank" then
-            player.removeAccountMoney("bank", amount, description)
-        elseif type == "cash" then
-            player.removeMoney(amount, description)
-        else
-            --CUSTOM ACCOUNT REMOVE MONEY FUNCTION HERE
-        end
-    end
-end
-
-
 
 function AddItem(source, name, amount, metadata)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(source)
-        player.Functions.AddItem(name, amount)
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
+    amount = tonumber(amount) or 1
+
+    if CoreName == 'qb-core' or CoreName == 'qbx_core' then
+        local player = GetPlayer(source)
+        return player and player.Functions and player.Functions.AddItem and player.Functions.AddItem(name, amount, false, metadata)
+    elseif CoreName == 'es_extended' then
+        local player = GetPlayer(source)
+        if not player then return false end
+
         local hasQs = GetResourceState('qs-inventory') == 'started'
-        local hasEsx = GetResourceState('esx_inventoryhud') == 'started'
-        local hasOx = GetResourceState('qb-inventory') == 'started'
+        local hasOx = GetResourceState('ox_inventory') == 'started'
 
         if hasQs then
             return exports['qs-inventory']:AddItem(source, name, amount)
-        elseif hasEsx then
-            return player.addInventoryItem(name, amount)
         elseif hasOx then
-            return exports["qb-inventory"]:AddItem(source, name, amount, metadata)
-        else
-            --CUSTOM INVENTORY ADD ITEM FUNCTION HERE
+            return exports.ox_inventory:AddItem(source, name, amount, metadata)
         end
 
+        player.addInventoryItem(name, amount)
+        return true
     end
+
+    return true
 end
 
 function RemoveItem(source, name, amount, metadata)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(source)
-        player.Functions.RemoveItem(name, amount, metadata)
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
+    amount = tonumber(amount) or 1
+
+    if CoreName == 'qb-core' or CoreName == 'qbx_core' then
+        local player = GetPlayer(source)
+        return player and player.Functions and player.Functions.RemoveItem and player.Functions.RemoveItem(name, amount, false, metadata)
+    elseif CoreName == 'es_extended' then
+        local player = GetPlayer(source)
+        if not player then return false end
+
         local hasQs = GetResourceState('qs-inventory') == 'started'
-        local hasEsx = GetResourceState('esx_inventoryhud') == 'started'
-        local hasOx = GetResourceState('qb-inventory') == 'started'
+        local hasOx = GetResourceState('ox_inventory') == 'started'
 
         if hasQs then
             return exports['qs-inventory']:RemoveItem(source, name, amount, metadata)
-        elseif hasEsx then
-            return player.removeInventoryItem(name, amount)
         elseif hasOx then
-            return exports["qb-inventory"]:RemoveItem(source, name, amount, metadata)
-        else
-            --CUSTOM INVENTORY REMOVE ITEM FUNCTION HERE
+            return exports.ox_inventory:RemoveItem(source, name, amount, metadata)
         end
+
+        player.removeInventoryItem(name, amount)
+        return true
     end
+
+    return true
 end
 
 function GetItem(source, name)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(source)
-        return player.Functions.GetItemByName(name)
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
+    if CoreName == 'qb-core' or CoreName == 'qbx_core' then
+        local player = GetPlayer(source)
+        return player and player.Functions and player.Functions.GetItemByName and player.Functions.GetItemByName(name) or nil
+    elseif CoreName == 'es_extended' then
+        local player = GetPlayer(source)
+        if not player then return nil end
+
         local hasQs = GetResourceState('qs-inventory') == 'started'
-        local hasEsx = GetResourceState('esx_inventoryhud') == 'started'
-        local hasOx = GetResourceState('qb-inventory') == 'started'
+        local hasOx = GetResourceState('ox_inventory') == 'started'
 
         if hasQs then
             return exports['qs-inventory']:GetItem(source, name)
-        elseif hasEsx then
-            return player.getInventoryItem(name)
         elseif hasOx then
-            return exports["qb-inventory"]:GetItem(source, name)
-        else
-            --CUSTOM INVENTORY GET ITEM FUNCTION HERE
+            return exports.ox_inventory:GetItem(source, name, nil, true)
         end
+
+        return player.getInventoryItem(name)
     end
+
+    return { name = name, amount = 9999, count = 9999 }
 end
 
 function GetInventory(source)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(source)
-        return player.PlayerData.items
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
+    if CoreName == 'qb-core' or CoreName == 'qbx_core' then
+        local player = GetPlayer(source)
+        return player and player.PlayerData and player.PlayerData.items or {}
+    elseif CoreName == 'es_extended' then
+        local player = GetPlayer(source)
+        if not player then return {} end
+
         local hasQs = GetResourceState('qs-inventory') == 'started'
-        local hasEsx = GetResourceState('esx_inventoryhud') == 'started'
-        local hasOx = GetResourceState('qb-inventory') == 'started'
+        local hasOx = GetResourceState('ox_inventory') == 'started'
 
         if hasQs then
             return exports['qs-inventory']:GetPlayerInventory(source)
-        elseif hasEsx or hasOx then
-            return player.getInventory()
-        -- elseif hasOx then
-        --     return exports["qb-inventory"]:GetPlayerInventory(source)
-        else
-            --CUSTOM INVENTORY GET INVENTORY FUNCTION HERE
+        elseif hasOx then
+            return exports.ox_inventory:GetInventoryItems(source)
         end
+
+        return player.getInventory() or {}
     end
+
+    return {}
 end
 
 function ItemCountControl(source, name, amount)
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        local player = Core.Functions.GetPlayer(source)
-        return player.Functions.GetItemByName(name).amount >= amount
-    elseif CoreName == "es_extended" then
-        local player = Core.GetPlayerFromId(source)
-        local hasQs = GetResourceState('qs-inventory') == 'started'
-        local hasEsx = GetResourceState('esx_inventoryhud') == 'started'
-        local hasOx = GetResourceState('qb-inventory') == 'started'
+    amount = tonumber(amount) or 1
 
-        if hasQs then
-            return exports['qs-inventory']:GetItem(source, name).amount >= amount
-        elseif hasEsx then
-            return player.getInventoryItem(name).count >= amount
-        elseif hasOx then
-            return exports["qb-inventory"]:GetItem(source, name).amount >= amount
-        else
-            --CUSTOM INVENTORY ITEM COUNT CONTROL FUNCTION HERE
-        end
+    if CoreName == 'standalone' then
+        return true
     end
-end
 
-function RegisterUseableItem(name)
-    while CoreReady == false do Citizen.Wait(0) end
-    if CoreName == "qb-core" or CoreName == "qbx_core" then
-        Core.Functions.CreateUseableItem(name, function(source, item)
-            TriggerClientEvent('exter-moneywash:showIdCard:client', source, item.info or item.metadata)
-        end)
-    elseif CoreName == "es_extended" then
-        local hasQs = GetResourceState('qs-inventory') == 'started'
-        if hasQs then
-            Core.RegisterUsableItem(name, function(source, item)
-                TriggerClientEvent('exter-moneywash:showIdCard:client', source, item.info)
-            end)
-            return
-        end
-        Core.RegisterUsableItem(k, function(source, _, item)
-            TriggerClientEvent('exter-moneywash:showIdCard:client', source, item.metadata)
-        end)
-    end
+    local item = GetItem(source, name)
+    if not item then return false end
+
+    local qty = item.amount or item.count or 0
+    return qty >= amount
 end
 
 PA.ServerCallbacks = {}
+
 function CreateCallback(name, cb)
     PA.ServerCallbacks[name] = cb
 end
 
 function TriggerCallback(name, source, cb, ...)
-    if not PA.ServerCallbacks[name] then return end
-    PA.ServerCallbacks[name](source, cb, ...)
+    local callback = PA.ServerCallbacks[name]
+    if not callback then return end
+    callback(source, cb, ...)
 end
 
-RegisterNetEvent('exter-moneywash:server:triggerCallback', function(name, ...)
+RegisterNetEvent('exter-objectspawner:server:triggerCallback', function(name, ...)
     local src = source
+
     TriggerCallback(name, src, function(...)
-        TriggerClientEvent('exter-moneywash:client:triggerCallback', src, name, ...)
+        TriggerClientEvent('exter-objectspawner:client:triggerCallback', src, name, ...)
     end, ...)
 end)

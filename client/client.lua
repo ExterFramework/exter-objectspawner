@@ -1,157 +1,167 @@
-playerData = {}
-cacheData = {}
-buildCacheData = {}
-allObject = {}
-sell = false
-randomCoords = nil
-torbaci = nil
-currentObject = nil
-objectHash = nil
-lastPropItem = nil
-itemSell = nil
-coinSell = 0
-local modelsToLoad = {"w_am_case","ch_prop_casino_drone_02a"}
-menuId = 0
+local playerData = {}
+local cacheData = {}
+local allObject = {}
+local currentObject = nil
+local objectHash = nil
+local lastPropItem = nil
+
+local function getIdentifierForClient()
+    local data = GetPlayerData() or {}
+    if CoreName == 'es_extended' then
+        return data.identifier
+    end
+
+    return data.citizenid or tostring(GetPlayerServerId(PlayerId()))
+end
+
+local function deleteEntitySafe(entity)
+    if entity and DoesEntityExist(entity) then
+        DeleteEntity(entity)
+    end
+end
+
+local function spawnCachedProps()
+    for i = 1, #allObject do
+        deleteEntitySafe(allObject[i])
+    end
+    allObject = {}
+
+    local myIdentifier = getIdentifierForClient()
+    if not myIdentifier then return end
+
+    for _, entry in pairs(cacheData or {}) do
+        if tostring(entry.identifier) == tostring(myIdentifier) then
+            for _, prop in pairs(entry.props or {}) do
+                local model = tonumber(prop.hash) or GetHashKey(prop.propname)
+                if not IsModelInCdimage(model) then
+                    model = GetHashKey(prop.propname)
+                end
+
+                RequestModel(model)
+                local timeout = GetGameTimer() + 5000
+                while not HasModelLoaded(model) and GetGameTimer() < timeout do
+                    Wait(25)
+                end
+
+                if HasModelLoaded(model) then
+                    local obj = CreateObject(model, prop.position.x, prop.position.y, prop.position.z, true, true, false)
+                    SetEntityAsMissionEntity(obj, true, true)
+                    SetEntityHeading(obj, prop.heading or 0.0)
+                    FreezeEntityPosition(obj, true)
+                    SetModelAsNoLongerNeeded(model)
+                    allObject[#allObject + 1] = obj
+                end
+            end
+        end
+    end
+end
 
 RegisterCommand('openprops', function()
     TriggerEvent('exter-objectspawner:openProps')
 end)
 
-RegisterNetEvent('exter-objectspawner:openProps')
-AddEventHandler('exter-objectspawner:openProps', function()
-    SetNuiFocus(1, 1)
+RegisterNetEvent('exter-objectspawner:openProps', function()
+    SetNuiFocus(true, true)
     SendNUIMessage({
-        action = "openProps",
+        action = 'openProps',
         data = PA.PropsAll,
     })
 end)
 
-RegisterNUICallback("openProps", function(data, cb)
-    flag = false
-    TriggerCallback('exter-objectspawner:propItemControl', function(serverCb) 
-        if serverCb then
-            lastPropItem = data.itemName
-            objectName = data.propName
-            objectHash = data.hash
-            local playerPed = PlayerPedId()
-            local offset = GetOffsetFromEntityInWorldCoords(playerPed, 0, 1.0, 0)
-            local model = joaat(objectName)
-
-            currentObject = CreateObject(model, offset.x, offset.y, offset.z, true, false, false)
-
-            Citizen.CreateThread(function()
-                while flag do 
-                    Wait(100)
-                    SendNUIMessage({
-                        action = "setPropsData",
-                        data = {
-                            rotation = GetEntityRotation(currentObject),
-                            position = GetEntityCoords(currentObject),
-                        }
-                    })
-                end
-            end)
-
-            local objectPositionData = exports.object_gizmo:useGizmo(currentObject) 
-
-            FreezeEntityPosition(currentObject, true)
-
-        else
+RegisterNUICallback('openProps', function(data, cb)
+    TriggerCallback('exter-objectspawner:propItemControl', function(serverCb)
+        if not serverCb then
             cb(false)
+            return
         end
+
+        lastPropItem = data.itemName
+        objectHash = tonumber(data.hash)
+
+        local model = GetHashKey(data.propName)
+        if not IsModelInCdimage(model) then
+            cb(false)
+            return
+        end
+
+        RequestModel(model)
+        local timeout = GetGameTimer() + 5000
+        while not HasModelLoaded(model) and GetGameTimer() < timeout do
+            Wait(25)
+        end
+
+        if not HasModelLoaded(model) then
+            cb(false)
+            return
+        end
+
+        local playerPed = PlayerPedId()
+        local offset = GetOffsetFromEntityInWorldCoords(playerPed, 0.0, 1.0, 0.0)
+
+        currentObject = CreateObject(model, offset.x, offset.y, offset.z, true, false, false)
+        local result = exports.object_gizmo:useGizmo(currentObject)
+        if result then
+            FreezeEntityPosition(currentObject, true)
+        end
+
+        cb(true)
     end, data)
 end)
 
-RegisterNUICallback('deleteProp',function()
-    DeleteEntity(currentObject)
-    DeleteObject(currentObject)
+RegisterNUICallback('deleteProp', function(_, cb)
+    deleteEntitySafe(currentObject)
     currentObject = nil
-    TriggerServerEvent('exter-money:addLastProp', lastPropItem)
+
+    if lastPropItem then
+        TriggerServerEvent('exter-money:addLastProp', lastPropItem)
+    end
+
     lastPropItem = nil
+    cb(true)
 end)
 
-RegisterNUICallback("close", function()
-    SetNuiFocus(0, 0)
-end)
-
-function loadModels(models)
-    for _, model in ipairs(models) do
-        RequestModel(model)
+RegisterNUICallback('saveBuild', function(_, cb)
+    if not currentObject or not DoesEntityExist(currentObject) then
+        cb(false)
+        return
     end
-    while not AreModelsLoaded(models) do
-        Wait(500)
-    end
-end
 
-function AreModelsLoaded(models)
-    for _, model in ipairs(models) do
-        if not HasModelLoaded(model) then
-            return false
-        end
-    end
-    return true
-end
-
-RegisterNUICallback("close", function()
-    SetNuiFocus(0, 0)
-end)
-
-
-RegisterNUICallback('saveBuild', function(data,cb)
-
-    for k , v in pairs(PA.PropsAll) do
-        if v.hash == tostring(objectHash) then
-            data = {
+    for _, propCfg in pairs(PA.PropsAll) do
+        if tostring(propCfg.hash) == tostring(objectHash) then
+            local data = {
                 rotation = GetEntityRotation(currentObject),
                 position = GetEntityCoords(currentObject),
                 heading = GetEntityHeading(currentObject),
-                name = v.name,
-                hash = v.hash,
-                propname = v.propname,
+                hash = propCfg.hash,
+                propname = propCfg.propname,
                 objId = math.random(1, 1000000),
             }
-            TriggerServerEvent('exter-objectspawner:createProp', data, menuId)
+
+            TriggerServerEvent('exter-objectspawner:createProp', data)
+            break
         end
     end
 
+    cb(true)
 end)
 
-RegisterNetEvent('exter-objectspawner:deleteLastProp')
-AddEventHandler('exter-objectspawner:deleteLastProp',function()
-    Notify("Since you already have one table, you cannot create another.", "error", 5000)
-    DeleteEntity(currentObject)
-    DeleteObject(currentObject)
+RegisterNUICallback('close', function(_, cb)
+    SetNuiFocus(false, false)
+    cb(true)
+end)
+
+RegisterNetEvent('exter-objectspawner:deleteLastProp', function()
+    Notify('Since you already have one table, you cannot create another.', 'error', 5000)
+    deleteEntitySafe(currentObject)
     currentObject = nil
 end)
 
-RegisterNetEvent('exter-objectspawner:setClient')
-AddEventHandler('exter-objectspawner:setClient',function(data)
-    cacheData = data
-
-    if cacheData then
-        for k, v in pairs(cacheData) do
-                id = v.id
-                identifier = v.identifier
-                props = v.props
-                miner = v.miner
-                canvas = v.canvas
-        end
-    end
-
+RegisterNetEvent('exter-objectspawner:setClient', function(data)
+    cacheData = data or {}
 end)
 
-RegisterNetEvent('exter-objectspawner:notify')
-AddEventHandler('exter-objectspawner:notify',function(data)
+RegisterNetEvent('exter-objectspawner:notify', function(data)
     Notify(data)
-end)
-
-RegisterNetEvent('exter-objectspawner:spawnProp')
-AddEventHandler('exter-objectspawner:spawnProp',function(data,obj)
-
-    SetEntityAsMissionEntity(NetworkGetNetworkIdFromEntity(obj), true, true)
-    SetEntityHeading(NetworkGetNetworkIdFromEntity(obj), data.heading)
-    FreezeEntityPosition(NetworkGetNetworkIdFromEntity(obj), true)
-    SetModelAsNoLongerNeeded(data.hash)
 end)
 
 AddEventHandler('QBCore:Client:OnPlayerLoaded', function()
@@ -162,99 +172,47 @@ RegisterNetEvent('esx:playerLoaded', function()
     playerData = GetPlayerData()
 end)
 
-
-Citizen.CreateThread(function()
-    while true do
-         Citizen.Wait(500)
-         if NetworkIsPlayerActive(PlayerId()) then 
-            playerData = GetPlayerData()
-            TriggerServerEvent('exter-objectspawner:dataPostClient')
-            Wait(5000)
-            TriggerEvent('exter-objectspawner:createObject', cacheData)
-            break
-        end 
+CreateThread(function()
+    while not NetworkIsPlayerActive(PlayerId()) do
+        Wait(250)
     end
+
+    playerData = GetPlayerData()
+    TriggerServerEvent('exter-objectspawner:dataPostClient')
+
+    Wait(1000)
+    spawnCachedProps()
 end)
 
-
-
-RegisterNetEvent('exter-objectspawner:createObject')
-AddEventHandler('exter-objectspawner:createObject', function(cacheData)
-    
-    for _, v1 in pairs(cacheData) do
-        if CoreName == "es_extended" then
-            if playerData.identifier == v1.identifier then
-                for _, v2 in pairs(v1.props) do
-                    obj = CreateObject(tonumber(v2.hash), v2.position.x, v2.position.y, v2.position.z, true, true, true)
-                    SetEntityAsMissionEntity(obj, true, true)
-                    SetEntityHeading(obj, v2.heading)
-                    FreezeEntityPosition(obj, true)
-                    SetModelAsNoLongerNeeded(model)
-                    table.insert(allObject, obj)
-                end
-            end
-        else
-            if tonumber(playerData.citizenid) == tonumber(v1.identifier) then
-                for _, v2 in pairs(v1.props) do
-                    obj = CreateObject(tonumber(GetHashKey(v2.propname)), v2.position.x, v2.position.y, v2.position.z, true, true, true)
-                    SetEntityAsMissionEntity(obj, true, true)
-                    SetEntityHeading(obj, v2.heading)
-                    FreezeEntityPosition(obj, true)
-                    SetModelAsNoLongerNeeded(model)
-                    table.insert(allObject, obj)
-                end
-            end
+CreateThread(function()
+    while true do
+        Wait(3000)
+        if #cacheData > 0 then
+            spawnCachedProps()
+            Wait(15000)
         end
     end
 end)
 
-
-RegisterNetEvent('exter-objectspawner:deleteProp')
-AddEventHandler('exter-objectspawner:deleteProp',function()
-    DeleteEntity(currentObject)
-    DeleteObject(currentObject)
-    for k, v in pairs(allObject) do
-        DeleteEntity(v)
-        DeleteObject(v)
-    end
-    allObject = {}
+RegisterNetEvent('exter-objectspawner:deleteProp', function()
+    deleteEntitySafe(currentObject)
     currentObject = nil
+
+    for i = 1, #allObject do
+        deleteEntitySafe(allObject[i])
+    end
+
+    allObject = {}
 end)
 
-
-function DrawText3D(x, y, z, text)
-    local onScreen, _x, _y = World3dToScreen2d(x, y, z)
-    local px, py, pz = table.unpack(GetGameplayCamCoords())
-    SetTextScale(0.32, 0.32)
-    SetTextFont(4)
-    SetTextProportional(1)
-    SetTextColour(255, 255, 255, 215)
-    SetTextEntry("STRING")
-    SetTextCentre(1)
-    AddTextComponentString(text)
-    DrawText(_x, _y)
-    local factor = (string.len(text)) / 500
-    DrawRect(_x, _y + 0.0125, 0.015 + factor, 0.03, 41, 11, 41, 68)
-end
-
-
-function loadAnimDict(dict)  
-    while not HasAnimDictLoaded(dict) do
-        RequestAnimDict(dict)
-        Citizen.Wait(500)
-    end
-end 
-
 AddEventHandler('onResourceStop', function(resourceName)
-    if (GetCurrentResourceName() ~= resourceName) then
-      return
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    for i = 1, #allObject do
+        deleteEntitySafe(allObject[i])
     end
-    for k, v in pairs(allObject) do
-        DeleteEntity(v)
-        DeleteObject(v)
-    end
-        DeleteEntity(currentObject)
-        DeleteObject(currentObject)
-        currentObject = nil
-        allObject = {}
+
+    deleteEntitySafe(currentObject)
+    currentObject = nil
+    allObject = {}
 end)

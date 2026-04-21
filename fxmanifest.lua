@@ -1,13 +1,10 @@
 fx_version 'bodacious'
-
 version '0.0.0'
-
 games { 'gta5' }
-
-lua54 "yes"
-
+lua54 'yes'
 
 ui_page 'html/index.html'
+
 files {
   'html/index.html',
   'html/script.js',
@@ -25,8 +22,8 @@ files {
   'images/*.svg',
 }
 
-client_scripts{
-    'client/*.lua',
+client_scripts {
+  'client/*.lua',
 }
 
 server_scripts {
@@ -35,18 +32,15 @@ server_scripts {
 }
 
 shared_scripts {
-	'shared/cores.lua',
-  'shared/config.lua'
+  'shared/cores.lua',
+  'shared/config.lua',
 }
 
 escrow_ignore {
-	'shared/cores.lua',
+  'shared/cores.lua',
   'shared/config.lua',
   'client/*.lua',
   'server/*.lua',
 }
 
-
-dependency '/assetpacks'
-dependency '/assetpacks'
 dependency '/assetpacks'

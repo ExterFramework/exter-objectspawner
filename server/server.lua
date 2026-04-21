@@ -1,227 +1,147 @@
-cacheData = {}
-objId = {}
-obj = nil
+local cacheData = {}
 
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
---                                                        EVENT                                                        
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
+local function decodeProps(raw)
+    if type(raw) == 'table' then return raw end
+    if type(raw) ~= 'string' or raw == '' then return {} end
 
-RegisterNetEvent('exter-objectspawner:dataPostClient')
-AddEventHandler('exter-objectspawner:dataPostClient',function()
-    TriggerClientEvent('exter-objectspawner:setClient',source,cacheData)
-end)
-
-RegisterNetEvent('exter-objectspawner:createUser')
-AddEventHandler('exter-objectspawner:createUser', function(xPlayer,identifier)
-    if not cacheData then
-        cacheData = {}
+    local ok, decoded = pcall(json.decode, raw)
+    if not ok or type(decoded) ~= 'table' then
+        return {}
     end
 
-    for _, v in ipairs(cacheData) do
-        if v.identifier == identifier then
-            return  
+    return decoded
+end
+
+local function findByIdentifier(identifier)
+    for i = 1, #cacheData do
+        if cacheData[i].identifier == identifier then
+            return cacheData[i], i
         end
     end
-     
-    MySQL.Async.execute('INSERT INTO exter_object (`identifier`, `props`) VALUES (@identifier,@props)',
-    {
-        ['@identifier'] = identifier, 
-        ['@props'] = json.encode({}), 
+
+    return nil, nil
+end
+
+local function broadcastCache()
+    TriggerClientEvent('exter-objectspawner:setClient', -1, cacheData)
+end
+
+local function ensureUser(identifier)
+    local existing = findByIdentifier(identifier)
+    if existing then return existing end
+
+    MySQL.Async.execute('INSERT INTO exter_object (`identifier`, `props`) VALUES (@identifier, @props)', {
+        ['@identifier'] = identifier,
+        ['@props'] = json.encode({})
     })
 
-    Wait(2000)
+    local created = {
+        identifier = identifier,
+        props = {}
+    }
+    table.insert(cacheData, created)
+    return created
+end
 
-    MySQL.Async.fetchAll('SELECT * FROM exter_object WHERE identifier = @identifier', {['@identifier'] = identifier}, function(result)
-        for k, v in pairs(result) do
-            data = {
-                id = v.id,
-                identifier = v.identifier,
-                props = v.props and json.decode(v.props) or {},
-            }
-            table.insert(cacheData, data)
-        end
-    end)
-
-    TriggerClientEvent('exter-objectspawner:setClient', -1, cacheData)
-    
+RegisterNetEvent('exter-objectspawner:dataPostClient', function()
+    TriggerClientEvent('exter-objectspawner:setClient', source, cacheData)
 end)
 
-RegisterNetEvent('exter-objectspawner:createProp')
-AddEventHandler('exter-objectspawner:createProp',function(prop,id)
+RegisterNetEvent('exter-objectspawner:createProp', function(prop)
     local src = source
-    local xPlayer = GetPlayer(src)
     local identifier = GetPlayerCid(src)
-    local propData = {} 
-    local flag = false
-            
-            TriggerEvent('exter-objectspawner:createUser', xPlayer,identifier)
-    
-            Wait(5000)
-    
-            table.insert(propData, prop)
-
-            if PA.CraftSystem then 
-                if prop.propname == "prop_tool_bench02_ld" or prop.propname == "gr_prop_gr_bench_02b" then 
-                    TriggerEvent('exter-craft:create', src, propData, function(success)
-                        if not success then
-                            TriggerClientEvent('exter-objectspawner:deleteLastProp', src, id)
-                            return false
-                        end
-                    end)
-                end            
-            end
-
-            print("kod devam ediyor")
-        
-            updateCacheDataForIdentifier(identifier, "props", propData)
-            MySQL.Async.execute('UPDATE exter_object SET `props` = @props WHERE identifier = @identifier', 
-            {
-                ['@props'] = json.encode(propData), 
-                ['@identifier'] = identifier
-            })
-            TriggerClientEvent('exter-objectspawner:setClient', -1, cacheData)
-
-
-    for k,v in pairs(cacheData) do 
-        if v.identifier == identifier then
-            flag = true
-            propData = type(v.props) == 'string' and json.decode(v.props) or v.props or {}
-        end
+    if not identifier then
+        Notify(src, 'Identifier player tidak ditemukan.', 'error', 5000)
+        return
     end
 
-    for k , v in pairs(cacheData) do 
-        if flag then 
-            for x , y in pairs(v.props) do
-                local coords1 = y.position
-                local coords2 = prop.position
-                    Notify(src,PA.Notify["notify"]["text"],PA.Notify["notify"]["msgType"],PA.Notify["notify"]["length"])
-                    table.insert(propData, prop)
-                    updateCacheDataForIdentifier(identifier, "props", propData)
-                    MySQL.Async.execute('UPDATE exter_object SET `props` = @props WHERE identifier = @identifier', 
-                    {
-                        ['@props'] = json.encode(propData), 
-                        ['@identifier'] = identifier
-                    })
-                    TriggerClientEvent('exter-objectspawner:setClient', -1, cacheData)
-                    return
-            end
-        end
+    if type(prop) ~= 'table' or not prop.propname or not prop.position then
+        Notify(src, 'Data prop tidak valid.', 'error', 5000)
+        return
     end
+
+    local entry = ensureUser(identifier)
+    entry.props = decodeProps(entry.props)
+
+    prop.objId = prop.objId or math.random(100000, 999999)
+    table.insert(entry.props, prop)
+
+    MySQL.Async.execute('UPDATE exter_object SET `props` = @props WHERE identifier = @identifier', {
+        ['@props'] = json.encode(entry.props),
+        ['@identifier'] = identifier
+    })
+
+    Notify(src, PA.Notify.notify.text, PA.Notify.notify.msgType, PA.Notify.notify.length)
+    broadcastCache()
 end)
 
-RegisterNetEvent('exter-money:addLastProp')
-AddEventHandler('exter-money:addLastProp', function(item)
-    local xPlayer =  GetPlayer(source)
-    if item == nil then return end
+RegisterNetEvent('exter-money:addLastProp', function(item)
+    if not item then return end
     AddItem(source, item, 1, {})
 end)
 
-function NotifyClient(src, message, data)
-    TriggerClientEvent(message, src, data)
-end
+RegisterNetEvent('exter-objectspawner:getData', function()
+    MySQL.Async.fetchAll('SELECT * FROM exter_object', {}, function(result)
+        cacheData = {}
 
-
-AddEventHandler('onResourceStop', function(resourceName)
-    if GetCurrentResourceName() == resourceName then 
-        return
-    end
-end)
-
-AddEventHandler('onResourceStart', function(resourceName)
-    if GetCurrentResourceName() == resourceName then 
-        TriggerEvent('exter-objectspawner:getData')
-        return
-    end
-end)
-
-
-RegisterNetEvent('exter-objectspawner:getData')
-AddEventHandler('exter-objectspawner:getData', function()
-
-    local function fetchData(callback)
-        MySQL.Async.fetchAll('SELECT * FROM exter_object', {}, function(result)
-            callback(result)
-        end)
-    end
-
-    fetchData(function(result)
-        for k, v in pairs(result) do
-            local data = {
-                id = v.id,
-                identifier = v.identifier,
-                props = v.props and json.decode(v.props) or {},
+        for i = 1, #result do
+            local row = result[i]
+            cacheData[#cacheData + 1] = {
+                id = row.id,
+                identifier = row.identifier,
+                props = decodeProps(row.props)
             }
-            table.insert(cacheData, data)
         end
+
+        broadcastCache()
     end)
 end)
 
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then return end
+    TriggerEvent('exter-objectspawner:getData')
+end)
 
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
---                                                        FUNCTION                                                    
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
-
-
-function updateCacheData(id, property, value)
-    for k, v in pairs(cacheData) do
-        if v.id == id then
-            v[property] = value
-        end
-    end
-end
-
-function updateCacheDataForIdentifier(identifier, property, value)
-    for k, v in pairs(cacheData) do
-        if v.identifier == identifier then
-            v[property] = value
-        end
-    end
-end
-
-
-
-
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
---                                                        CALLBACK                                                    
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
-
-
-CreateCallback('exter-objectspawner:getInventory', function(source,cb,searchItem)
-    local xPlayer =  GetPlayer(source)
+CreateCallback('exter-objectspawner:getInventory', function(source, cb, searchItem)
     local items = GetInventory(source)
-    local itemArr = {}
-    for k, v in pairs(items) do
-        for x , y in pairs(searchItem) do 
-        if v.name == y.itemName  then
-                table.insert(itemArr, v)
-            end 
+    local result = {}
+
+    local lookup = {}
+    if type(searchItem) == 'table' then
+        for i = 1, #searchItem do
+            local item = searchItem[i]
+            if item and item.itemName then
+                lookup[item.itemName] = true
+            end
         end
     end
-    cb(itemArr)
+
+    for _, v in pairs(items or {}) do
+        if v and v.name and lookup[v.name] then
+            result[#result + 1] = v
+        end
+    end
+
+    cb(result)
 end)
 
-
-CreateCallback('exter-objectspawner:propItemControl', function(source,cb,data)
-    local xPlayer =  GetPlayer(source)
-    local item = GetItem(source, data.itemName)
-    if item ~= nil then 
-        if ItemCountControl(source, data.itemName,1) then
-            RemoveItem(source, data.itemName, 1, {})
-            cb(true)
-        else
-            cb(false)
-        end
-    else
+CreateCallback('exter-objectspawner:propItemControl', function(source, cb, data)
+    if type(data) ~= 'table' or not data.itemName then
         cb(false)
+        return
     end
 
+    if CoreName == 'standalone' then
+        cb(true)
+        return
+    end
+
+    local item = GetItem(source, data.itemName)
+    if item and ItemCountControl(source, data.itemName, 1) then
+        RemoveItem(source, data.itemName, 1, {})
+        cb(true)
+        return
+    end
+
+    cb(false)
 end)
-
-
-
-
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
---                                                        THREAD                                                    
--- ⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛
-
-
